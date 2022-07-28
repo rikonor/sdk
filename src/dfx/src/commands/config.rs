@@ -2,12 +2,14 @@ use crate::config::dfinity::Config;
 use crate::lib::environment::Environment;
 use crate::lib::error::DfxResult;
 
-use anyhow::{anyhow, bail};
-use clap::Clap;
+use anyhow::{anyhow, bail, Context};
+use clap::Parser;
 use serde_json::value::Value;
+use slog::warn;
 
 /// Configures project options for your currently-selected project.
-#[derive(Clap)]
+#[derive(Parser)]
+#[clap(hide(true))]
 pub struct ConfigOpts {
     /// Specifies the name of the configuration option to set or read.
     /// Use the period delineated path to specify the option to set or read.
@@ -24,6 +26,7 @@ pub struct ConfigOpts {
 }
 
 pub fn exec(env: &dyn Environment, opts: ConfigOpts) -> DfxResult {
+    warn!(env.get_logger(), "`dfx config` is deprecated, and will be removed in the next release; consider using the `jq` tool or similar");
     // Cannot use the `env` variable as we need a mutable copy.
     let mut config: Config = env.get_config_or_anyhow()?.as_ref().clone();
 
@@ -33,7 +36,7 @@ pub fn exec(env: &dyn Environment, opts: ConfigOpts) -> DfxResult {
     // We replace `.` with `/` so the user can use `path.value.field` instead of forcing him
     // to use `path/value/field`. Since none of our keys have slashes or tildes in them it
     // won't be a problem.
-    let mut config_path = config_path.replace(".", "/");
+    let mut config_path = config_path.replace('.', "/");
     // We change config path to starts with a `/` if it doesn't already. This is because
     // JSON pointers can be relative, but we don't have a place to start if is it.
     if !config_path.starts_with('/') {
@@ -56,7 +59,11 @@ pub fn exec(env: &dyn Environment, opts: ConfigOpts) -> DfxResult {
     } else if let Some(value) = config.get_json().pointer(config_path.as_str()) {
         match format {
             "text" => println!("{}", value),
-            "json" => println!("{}", serde_json::to_string_pretty(value)?),
+            "json" => println!(
+                "{}",
+                serde_json::to_string_pretty(value)
+                    .context("Failed to serialize config to json")?
+            ),
             _ => {}
         }
         Ok(())

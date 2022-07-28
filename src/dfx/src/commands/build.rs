@@ -5,10 +5,10 @@ use crate::lib::models::canister::CanisterPool;
 use crate::lib::models::canister_id_store::CanisterIdStore;
 use crate::lib::provider::create_agent_environment;
 
-use clap::Clap;
+use clap::Parser;
 
 /// Builds all or specific canisters from the code in your project. By default, all canisters are built.
-#[derive(Clap)]
+#[derive(Parser)]
 pub struct CanisterBuildOpts {
     /// Specifies the name of the canister to build.
     /// You must specify either a canister name or the --all option.
@@ -64,7 +64,8 @@ pub fn exec(env: &dyn Environment, opts: CanisterBuildOpts) -> DfxResult {
         // This is just to display an error if trying to build before creating the canister.
         let store = CanisterIdStore::for_env(&env)?;
         for canister in canister_pool.get_canister_list() {
-            store.get(canister.get_name())?;
+            let canister_name = canister.get_name();
+            store.get(canister_name)?;
         }
     }
 

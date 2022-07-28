@@ -1,3 +1,4 @@
+use crate::lib::diagnosis::DiagnosedError;
 use crate::lib::environment::Environment;
 use crate::lib::error::DfxResult;
 use crate::lib::ic_attributes::{
@@ -13,13 +14,14 @@ use crate::util::clap::validators::{
 };
 use crate::util::expiry_duration;
 
-use anyhow::{anyhow, bail};
-use clap::{ArgSettings, Clap};
+use anyhow::{anyhow, bail, Context};
+use candid::Principal as CanisterId;
+use clap::Parser;
+use fn_error_context::context;
 use ic_agent::identity::Identity;
-use ic_types::principal::Principal as CanisterId;
 
 /// Update one or more of a canister's settings (i.e its controller, compute allocation, or memory allocation.)
-#[derive(Clap)]
+#[derive(Parser)]
 pub struct UpdateSettingsOpts {
     /// Specifies the canister name or id to update. You must specify either canister name/id or the --all option.
     canister: Option<String>,
@@ -29,23 +31,15 @@ pub struct UpdateSettingsOpts {
     all: bool,
 
     /// Specifies the identity name or the principal of the new controller.
-    #[clap(long, multiple(true), number_of_values(1))]
+    #[clap(long, multiple_occurrences(true))]
     controller: Option<Vec<String>>,
 
-    #[clap(
-        long,
-        multiple(true),
-        number_of_values(1),
-        conflicts_with("controller")
-    )]
+    /// Add a principal to the list of controllers of the canister.
+    #[clap(long, multiple_occurrences(true), conflicts_with("controller"))]
     add_controller: Option<Vec<String>>,
 
-    #[clap(
-        long,
-        multiple(true),
-        number_of_values(1),
-        conflicts_with("controller")
-    )]
+    /// Removes a principal from the list of controllers of the canister.
+    #[clap(long, multiple_occurrences(true), conflicts_with("controller"))]
     remove_controller: Option<Vec<String>>,
 
     /// Specifies the canister's compute allocation. This should be a percent in the range [0..100]
@@ -60,8 +54,16 @@ pub struct UpdateSettingsOpts {
     #[clap(long, validator(memory_allocation_validator))]
     memory_allocation: Option<String>,
 
-    #[clap(long, validator(freezing_threshold_validator), setting = ArgSettings::Hidden)]
+    /// Sets the freezing_threshold in SECONDS.
+    /// A canister is considered frozen whenever the IC estimates that the canister would be depleted of cycles
+    /// before freezing_threshold seconds pass, given the canister's current size and the IC's current cost for storage.
+    /// A frozen canister rejects any calls made to it.
+    #[clap(long, validator(freezing_threshold_validator))]
     freezing_threshold: Option<String>,
+
+    /// Freezing thresholds above ~1.5 years require this flag as confirmation.
+    #[clap(long)]
+    confirm_very_long_freezing_threshold: bool,
 }
 
 pub async fn exec(
@@ -69,6 +71,20 @@ pub async fn exec(
     opts: UpdateSettingsOpts,
     call_sender: &CallSender,
 ) -> DfxResult {
+    // sanity checks
+    if let Some(ref threshold_string) = opts.freezing_threshold {
+        let threshold_in_seconds = threshold_string
+            .parse::<u128>()
+            .expect("freezing_threshold_validator did not properly validate.");
+        if threshold_in_seconds > 50_000_000 /* ~1.5 years */ && !opts.confirm_very_long_freezing_threshold
+        {
+            return Err(DiagnosedError::new(
+                "The freezing threshold is defined in SECONDS before the canister would run out of cycles, not in cycles.".to_string(),
+                "If you truly want to set a freezing threshold that is longer than a year, please run the same command, but with the flag --confirm-very-long-freezing-threshold to confirm you want to do this.".to_string(),
+            )).context("Misunderstanding is very likely.");
+        }
+    }
+
     let config = env.get_config_or_anyhow()?;
     let timeout = expiry_duration();
     let config_interface = config.get_config();
@@ -81,7 +97,9 @@ pub async fn exec(
             .collect::<DfxResult<Vec<_>>>();
         y
     });
-    let controllers = controllers.transpose()?;
+    let controllers = controllers
+        .transpose()
+        .context("Failed to determine all new controllers given in --controllers.")?;
 
     let canister_id_store = CanisterIdStore::for_env(env)?;
 
@@ -90,9 +108,7 @@ pub async fn exec(
         let canister_id = CanisterId::from_text(canister_name_or_id)
             .or_else(|_| canister_id_store.get(canister_name_or_id))?;
         let textual_cid = canister_id.to_text();
-        let canister_name = canister_id_store
-            .get_name(&textual_cid)
-            .ok_or_else(|| anyhow!("Cannot find canister name for id '{}'.", textual_cid))?;
+        let canister_name = canister_id_store.get_name(&textual_cid).map(|x| &**x);
 
         let compute_allocation = get_compute_allocation(
             opts.compute_allocation.clone(),
@@ -127,7 +143,8 @@ pub async fn exec(
             let removed = removed
                 .iter()
                 .map(|r| controller_to_principal(env, r))
-                .collect::<DfxResult<Vec<_>>>()?;
+                .collect::<DfxResult<Vec<_>>>()
+                .context("Failed to determine all controllers to remove.")?;
             for s in removed {
                 if let Some(idx) = controllers.iter().position(|x| *x == s) {
                     controllers.swap_remove(idx);
@@ -151,18 +168,27 @@ pub async fn exec(
                 let compute_allocation = get_compute_allocation(
                     opts.compute_allocation.clone(),
                     config_interface,
-                    canister_name,
-                )?;
+                    Some(canister_name),
+                )
+                .with_context(|| {
+                    format!("Failed to get compute allocation for {}.", canister_name)
+                })?;
                 let memory_allocation = get_memory_allocation(
                     opts.memory_allocation.clone(),
                     config_interface,
-                    canister_name,
-                )?;
+                    Some(canister_name),
+                )
+                .with_context(|| {
+                    format!("Failed to get memory allocation for {}.", canister_name)
+                })?;
                 let freezing_threshold = get_freezing_threshold(
                     opts.freezing_threshold.clone(),
                     config_interface,
-                    canister_name,
-                )?;
+                    Some(canister_name),
+                )
+                .with_context(|| {
+                    format!("Failed to get freezing threshold for {}.", canister_name)
+                })?;
                 if let Some(added) = &opts.add_controller {
                     let status =
                         get_canister_status(env, canister_id, timeout, call_sender).await?;
@@ -183,7 +209,8 @@ pub async fn exec(
                     let removed = removed
                         .iter()
                         .map(|r| controller_to_principal(env, r))
-                        .collect::<DfxResult<Vec<_>>>()?;
+                        .collect::<DfxResult<Vec<_>>>()
+                        .context("Failed to determine all controllers to remove.")?;
                     for s in removed {
                         if let Some(idx) = controllers.iter().position(|x| *x == s) {
                             controllers.swap_remove(idx);
@@ -207,6 +234,7 @@ pub async fn exec(
     Ok(())
 }
 
+#[context("Failed to convert controller '{}' to a principal", controller)]
 fn controller_to_principal(env: &dyn Environment, controller: &str) -> DfxResult<CanisterId> {
     match CanisterId::from_text(controller) {
         Ok(principal) => Ok(principal),

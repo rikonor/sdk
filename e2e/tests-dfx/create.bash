@@ -32,7 +32,7 @@ teardown() {
     PRINCIPAL=$(dfx identity get-principal)
     WALLET=$(dfx identity get-wallet)
     assert_command dfx canister create --all
-    assert_command dfx canister info e2e_project
+    assert_command dfx canister info e2e_project_backend
     assert_match "Controllers: ($PRINCIPAL $WALLET|$WALLET $PRINCIPAL)"
 }
 
@@ -41,7 +41,7 @@ teardown() {
     PRINCIPAL=$(dfx identity get-principal)
     WALLET=$(dfx identity get-wallet)
     assert_command dfx canister create --all --no-wallet
-    assert_command dfx canister info e2e_project
+    assert_command dfx canister info e2e_project_backend
     assert_not_match "Controllers: ($PRINCIPAL $WALLET|$WALLET $PRINCIPAL)"
     assert_match "Controllers: $PRINCIPAL"
 }
@@ -54,9 +54,9 @@ teardown() {
 
 @test "build fails if all canisters in project are not created" {
     dfx_start
-    assert_command dfx canister create e2e_project
+    assert_command dfx canister create e2e_project_backend
     assert_command_fail dfx build
-    assert_match "Cannot find canister id. Please issue 'dfx canister create e2e_project_assets'"
+    assert_match "Cannot find canister id. Please issue 'dfx canister create e2e_project_frontend'"
 }
 
 @test "create succeeds with network parameter" {
@@ -104,12 +104,12 @@ teardown() {
 
 @test "create accepts --controller <controller> named parameter, with controller by identity name" {
     dfx_start
-    dfx identity new alice
+    dfx identity new --disable-encryption alice
     ALICE_PRINCIPAL=$(dfx --identity alice identity get-principal)
     
     
     assert_command dfx canister create --all --controller alice
-    assert_command dfx canister info e2e_project
+    assert_command dfx canister info e2e_project_backend
     assert_match "Controllers: $ALICE_PRINCIPAL"
 
     assert_command_fail dfx deploy
@@ -118,12 +118,12 @@ teardown() {
 
 @test "create accepts --controller <controller> named parameter, with controller by identity principal" {
     dfx_start
-    dfx identity new alice
+    dfx identity new --disable-encryption alice
     ALICE_PRINCIPAL=$(dfx --identity alice identity get-principal)
     ALICE_WALLET=$(dfx --identity alice identity get-wallet)
 
     assert_command dfx canister create --all --controller "${ALICE_PRINCIPAL}"
-    assert_command dfx canister info e2e_project
+    assert_command dfx canister info e2e_project_backend
     assert_not_match "Controllers: ($ALICE_WALLET $ALICE_PRINCIPAL|$ALICE_PRINCIPAL $ALICE_WALLET)"
     assert_match "Controllers: $ALICE_PRINCIPAL"
 
@@ -133,11 +133,11 @@ teardown() {
 
 @test "create accepts --controller <controller> named parameter, with controller by wallet principal" {
     dfx_start
-    dfx identity new alice
+    dfx identity new --disable-encryption alice
     ALICE_WALLET=$(dfx --identity alice identity get-wallet)
 
     assert_command dfx canister create --all --controller "${ALICE_WALLET}"
-    assert_command dfx canister info e2e_project
+    assert_command dfx canister info e2e_project_backend
     assert_match "Controllers: $ALICE_WALLET"
 
     assert_command_fail dfx deploy
@@ -149,8 +149,8 @@ teardown() {
     # there is a different code path if the specified controller happens to be
     # the currently selected identity.
     dfx_start
-    dfx identity new alice
-    dfx identity new bob
+    dfx identity new --disable-encryption alice
+    dfx identity new --disable-encryption bob
     BOB_PRINCIPAL=$(dfx --identity bob identity get-principal)
 
     dfx identity use bob
@@ -158,7 +158,7 @@ teardown() {
     assert_command dfx canister create --all --controller bob
 
     dfx identity use alice
-    assert_command dfx canister info e2e_project
+    assert_command dfx canister info e2e_project_backend
     assert_match "Controllers: $BOB_PRINCIPAL"
 
     assert_command_fail dfx deploy
@@ -167,40 +167,40 @@ teardown() {
 
 @test "create single controller accepts --controller <controller> named parameter, with controller by identity name" {
     dfx_start
-    dfx identity new alice
-    dfx identity new bob
+    dfx identity new --disable-encryption alice
+    dfx identity new --disable-encryption bob
     ALICE_PRINCIPAL=$(dfx --identity alice identity get-principal)
     BOB_PRINCIPAL=$(dfx --identity bob identity get-principal)
 
-    assert_command dfx canister create --controller alice e2e_project
-    assert_command dfx canister create --controller bob e2e_project_assets
+    assert_command dfx canister create --controller alice e2e_project_backend
+    assert_command dfx canister create --controller bob e2e_project_frontend
 
-    assert_command dfx canister info e2e_project
+    assert_command dfx canister info e2e_project_backend
     assert_match "Controllers: $ALICE_PRINCIPAL"
 
-    assert_command dfx canister info e2e_project_assets
+    assert_command dfx canister info e2e_project_frontend
     assert_match "Controllers: $BOB_PRINCIPAL"
 
     # check this first, because alice will deploy e2e_project in the next step
-    assert_command_fail dfx --identity bob deploy e2e_project
+    assert_command_fail dfx --identity bob deploy e2e_project_backend
     # this actually deploys e2e_project before failing, because it is a dependency
-    assert_command_fail dfx --identity alice deploy e2e_project_assets
+    assert_command_fail dfx --identity alice deploy e2e_project_frontend
 
-    assert_command dfx --identity alice deploy e2e_project
-    assert_command dfx --identity bob deploy e2e_project_assets
+    assert_command dfx --identity alice deploy e2e_project_backend
+    assert_command dfx --identity bob deploy e2e_project_frontend
 }
 
 @test "create canister with multiple controllers" {
     dfx_start
-    dfx identity new alice
-    dfx identity new bob
+    dfx identity new --disable-encryption alice
+    dfx identity new --disable-encryption bob
     ALICE_PRINCIPAL=$(dfx --identity alice identity get-principal)
     BOB_PRINCIPAL=$(dfx --identity bob identity get-principal)
     # awk step is to avoid trailing space
     PRINCIPALS_SORTED=$(echo "$ALICE_PRINCIPAL" "$BOB_PRINCIPAL" | tr " " "\n" | sort | tr "\n" " " | awk '{printf "%s %s",$1,$2}' )
 
     assert_command dfx --identity alice canister create --all --controller alice --controller bob
-    assert_command dfx canister info e2e_project
+    assert_command dfx canister info e2e_project_backend
     assert_match "Controllers: ${PRINCIPALS_SORTED}"
 
     assert_command dfx --identity alice deploy
@@ -209,7 +209,7 @@ teardown() {
     # The certified assets canister will have added alice as an authorized user, because she was the caller
     # at initialization time.  Bob has to be added separately.  BUT, the canister has to be deployed first
     # in order to call the authorize method.
-    assert_command dfx --identity alice canister call e2e_project_assets authorize "(principal \"$BOB_PRINCIPAL\")"
+    assert_command dfx --identity alice canister call e2e_project_frontend authorize "(principal \"$BOB_PRINCIPAL\")"
 
     assert_command dfx --identity bob deploy
 }
@@ -218,8 +218,8 @@ teardown() {
     use_wallet_wasm 0.7.2
 
     dfx_start
-    dfx identity new alice
-    dfx identity new bob
+    dfx identity new --disable-encryption alice
+    dfx identity new --disable-encryption bob
 
     assert_command_fail dfx --identity alice canister create --all --controller alice --controller bob
     assert_match "The wallet canister must be upgraded: The installed wallet does not support multiple controllers."
@@ -230,3 +230,7 @@ teardown() {
     assert_command dfx --identity alice canister create --all --controller alice --controller bob
 }
 
+@test "canister-create on mainnet without wallet does not propagate the 404" {
+    assert_command_fail dfx deploy --network ic --no-wallet
+    assert_match 'dfx ledger create-canister'
+}

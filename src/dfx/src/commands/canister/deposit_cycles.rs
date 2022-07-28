@@ -7,14 +7,14 @@ use crate::lib::root_key::fetch_root_key_if_needed;
 use crate::util::clap::validators::cycle_amount_validator;
 use crate::util::expiry_duration;
 
-use anyhow::bail;
-use clap::Clap;
-use ic_types::Principal;
+use anyhow::{bail, Context};
+use candid::Principal;
+use clap::Parser;
 use slog::info;
 use std::time::Duration;
 
 /// Deposit cycles into the specified canister.
-#[derive(Clap)]
+#[derive(Parser)]
 pub struct DepositCyclesOpts {
     /// Specifies the amount of cycles to send on the call.
     /// Deducted from the wallet.
@@ -35,7 +35,7 @@ async fn deposit_cycles(
     canister: &str,
     timeout: Duration,
     call_sender: &CallSender,
-    cycles: u64,
+    cycles: u128,
 ) -> DfxResult {
     let log = env.get_logger();
     let canister_id_store = CanisterIdStore::for_env(env)?;
@@ -46,12 +46,15 @@ async fn deposit_cycles(
 
     canister::deposit_cycles(env, canister_id, timeout, call_sender, cycles).await?;
 
-    let status = canister::get_canister_status(env, canister_id, timeout, call_sender).await?;
-
-    info!(
-        log,
-        "Deposited {} cycles, updated balance: {} cycles", cycles, status.cycles
-    );
+    let status = canister::get_canister_status(env, canister_id, timeout, call_sender).await;
+    if let Ok(status) = status {
+        info!(
+            log,
+            "Deposited {} cycles, updated balance: {} cycles", cycles, status.cycles
+        );
+    } else {
+        info!(log, "Deposited {cycles} cycles.");
+    }
 
     Ok(())
 }
@@ -62,11 +65,11 @@ pub async fn exec(
     call_sender: &CallSender,
 ) -> DfxResult {
     if call_sender == &CallSender::SelectedId {
-        bail!("The deposit cycles call needs to proxied via the wallet canister. Invoke this command without the `--no-wallet` flag.");
+        bail!("The deposit cycles call needs to proxied via the wallet canister. Please run this command using 'dfx canister --wallet <your wallet id> deposit-cycles <other arguments>'.");
     }
 
     // amount has been validated by cycle_amount_validator
-    let cycles = opts.cycles.parse::<u64>().unwrap();
+    let cycles = opts.cycles.parse::<u128>().unwrap();
 
     let config = env.get_config_or_anyhow()?;
 
@@ -78,7 +81,9 @@ pub async fn exec(
     } else if opts.all {
         if let Some(canisters) = &config.get_config().canisters {
             for canister in canisters.keys() {
-                deposit_cycles(env, canister, timeout, call_sender, cycles).await?;
+                deposit_cycles(env, canister, timeout, call_sender, cycles)
+                    .await
+                    .with_context(|| format!("Failed to deposit cycles into {}.", canister))?;
             }
         }
         Ok(())

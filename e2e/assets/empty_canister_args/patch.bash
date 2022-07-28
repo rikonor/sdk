@@ -5,12 +5,12 @@ patch dfx.json <<EOF
    "canisters": {
      "e2e_project": {
        "type": "motoko",
--      "main": "src/e2e_project/main.mo"
-+      "main": "src/e2e_project/main.mo",
+-      "main": "src/e2e_project_backend/main.mo"
++      "main": "src/e2e_project_backend/main.mo",
 +      "args" : ""
      },
-     "e2e_project_assets": {
+     "e2e_project_frontend": {
        "type": "assets",
 EOF
 
-dfx config defaults/build/args -- "--error-detail 5 --compacting-gcX"
+cat <<<"$(jq '.defaults.build.args="--error-detail 5 --compacting-gcX"' dfx.json)" >dfx.json
